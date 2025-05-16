@@ -11,13 +11,17 @@ import logging
 import os
 from pathlib import Path
 
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(
+    os.getcwd(), "steel-earth-454910-p1-9fd317e97fc5.json"
+)
+
 import tempfile
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from datetime import datetime
-import whisper
+from google.cloud import speech_v1p1beta1 as speech
 from typing import Optional
 import tempfile
 from pydantic import BaseModel
@@ -31,6 +35,7 @@ import base64
 from io import BytesIO
 import os
 import uuid
+
 
 load_dotenv()
 # Configure logging
@@ -47,19 +52,16 @@ logging.getLogger().setLevel(logging.INFO)
 
 # Get Gemini API key from environment variable
 print("Environment variables loaded:")
-app = FastAPI()
+# Google STT 클라이언트 초기화
+stt_client = speech.SpeechClient()
 
-whisper_model = whisper.load_model("small")
-# Create directory to store images if it doesn't exist
+app = FastAPI()
 IMAGES_DIR = Path("generated_images")
 IMAGES_DIR.mkdir(exist_ok=True)
-
-# Mount the image directory to serve files
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
-# Audio amplitude threshold - below this we consider the audio too quiet
+
 AMPLITUDE_THRESHOLD = 0.15
 
-# Define the ImagePrompt class
 class ImagePrompt(BaseModel):
     prompt: str
 
@@ -68,55 +70,49 @@ async def transcribe_audio(
     sample_rate: int = Form(...),
     audio_data: UploadFile = File(...)
 ):
-    """
-    Endpoint for speech-to-text transcription using Whisper AI.
-    Processes complete audio recordings and returns transcription.
-    """
-    temp_file = None
     try:
-        # Read raw audio data
+        # 1) 바이트 읽기
         content = await audio_data.read()
         
-        # Convert raw PCM data to numpy array
-        audio_np = np.frombuffer(content, dtype=np.int16)
-        audio_float = audio_np.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
+        # 2) numpy 변환 (16-bit PCM → float)
+        audio_np    = np.frombuffer(content, dtype=np.int16)
+        audio_float = (audio_np.astype(np.float32) / 32768.0)
 
-        # Save as temporary WAV file (Whisper requires a file)
-        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-        sf.write(temp_file.name, audio_float, sample_rate, format='WAV')
+        # 3) LINEAR16 PCM 포맷으로 재인코딩
+        #    Google STT는 raw bytes를 바로 받지 않으므로 wav로 임시 저장
+        temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        import soundfile as sf
+        sf.write(temp_wav.name, audio_float, sample_rate, format="WAV")
+        with open(temp_wav.name, "rb") as f:
+            wav_bytes = f.read()
 
-        # Log audio details
-        logger.info(f"Processing audio file:")
-        logger.info(f"Sample rate: {sample_rate} Hz")
-        logger.info(f"Duration: {len(audio_float) / sample_rate:.2f} seconds")
-        logger.info(f"Max amplitude: {np.max(np.abs(audio_float)):.4f}")
-
-        # Transcribe using Whisper
-        result = whisper_model.transcribe(
-            temp_file.name,
-            language="en",
-            fp16=False
+        # 4) Google STT 요청 구성
+        audio = speech.RecognitionAudio(content=wav_bytes)
+        config = speech.RecognitionConfig(
+            encoding        = speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz = sample_rate,
+            language_code   = "EN-US",     
+            enable_automatic_punctuation = True
         )
 
-        transcribed_text = result["text"].strip()
-        logger.info(f"Transcription result: {transcribed_text}")
+        # 5) 동기 인식 호출
+        response = stt_client.recognize(config=config, audio=audio)
 
-        return {
-            "status": "success",
-            "text": transcribed_text
-        }
+        # 6) 결과 합치기
+        transcript = " ".join([res.alternatives[0].transcript for res in response.results])
+        logger.info(f"Transcription: {transcript}")
+
+        return {"status": "success", "text": transcript}
 
     except Exception as e:
-        logger.error(f"Error in transcription: {str(e)}")
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+        logger.error(f"Transcription error: {e}")
+        return {"status": "error", "error": str(e)}
 
     finally:
-        # Cleanup
-        if temp_file and os.path.exists(temp_file.name):
-            os.unlink(temp_file.name)
+        # 임시 파일 정리
+        if 'temp_wav' in locals() and os.path.exists(temp_wav.name):
+            os.unlink(temp_wav.name)
+            
 
 @app.post("/generate_image")
 async def generate_image(prompt_data: ImagePrompt):
