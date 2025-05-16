@@ -13,7 +13,7 @@ from pathlib import Path
 
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(
     os.getcwd(), "steel-earth-454910-p1-9fd317e97fc5.json"
-)
+) # Path to your service account key file
 
 import tempfile
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
