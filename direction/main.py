@@ -52,7 +52,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 # Get Gemini API key from environment variable
 print("Environment variables loaded:")
-# Google STT 클라이언트 초기화
+# Google STT client initialization
 stt_client = speech.SpeechClient()
 
 app = FastAPI()
@@ -71,22 +71,21 @@ async def transcribe_audio(
     audio_data: UploadFile = File(...)
 ):
     try:
-        # 1) 바이트 읽기
+        # 1) Read the raw audio bytes
         content = await audio_data.read()
         
-        # 2) numpy 변환 (16-bit PCM → float)
+        # 2) Convert raw PCM data to numpy array and normalize
         audio_np    = np.frombuffer(content, dtype=np.int16)
         audio_float = (audio_np.astype(np.float32) / 32768.0)
 
-        # 3) LINEAR16 PCM 포맷으로 재인코딩
-        #    Google STT는 raw bytes를 바로 받지 않으므로 wav로 임시 저장
+        # 3) Write to a temporary WAV file (Google STT requires WAV)
         temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         import soundfile as sf
         sf.write(temp_wav.name, audio_float, sample_rate, format="WAV")
         with open(temp_wav.name, "rb") as f:
             wav_bytes = f.read()
 
-        # 4) Google STT 요청 구성
+        # 4) Build RecognitionAudio and RecognitionConfig
         audio = speech.RecognitionAudio(content=wav_bytes)
         config = speech.RecognitionConfig(
             encoding        = speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -95,10 +94,10 @@ async def transcribe_audio(
             enable_automatic_punctuation = True
         )
 
-        # 5) 동기 인식 호출
+        # 5) Call the synchronous recognition method
         response = stt_client.recognize(config=config, audio=audio)
 
-        # 6) 결과 합치기
+        # 6) Aggregate transcripts from all results
         transcript = " ".join([res.alternatives[0].transcript for res in response.results])
         logger.info(f"Transcription: {transcript}")
 
@@ -109,7 +108,7 @@ async def transcribe_audio(
         return {"status": "error", "error": str(e)}
 
     finally:
-        # 임시 파일 정리
+        # Remove the temporary WAV file
         if 'temp_wav' in locals() and os.path.exists(temp_wav.name):
             os.unlink(temp_wav.name)
             
