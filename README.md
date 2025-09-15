@@ -1,5 +1,7 @@
 # VisualVroom - ViT-based Deaf Driver Assistance Wearable App
 
+[2025 ICT Award Korea 대학부 - 한국정보처리학회 대상]
+
 [![Demo Video](https://img.shields.io/badge/Demo-YouTube-red)](https://youtu.be/BQmdU7jwddo)
 [![Working Prototype](https://img.shields.io/badge/Prototype-YouTube-red)](https://youtube.com/shorts/Jkzg4zz500I?feature=share)
 [![Frontend Repo](https://img.shields.io/badge/Frontend-GitHub-blue)](https://github.com/GDG-SKKU/VisualVroom_Android_GDG)
